@@ -23,6 +23,7 @@
 #define STATUS1_REG			0x07
 #define FIFO_LEVEL_REG		0x0A
 #define BIT_FRAMING_REG		0x0D
+#define COM_IRQ_REG			0x04
 
 /* commands */
 #define SOFT_RESET_CMD	0x0F
@@ -144,11 +145,10 @@ void app_main(void) {
 		writereg( FIFO_DATA_REG, REQA );
 		writereg( MFRC522_REG_CMD, TRANSCEIVE_CMD ); 
 		writereg( BIT_FRAMING_REG, 0x07 | (1 << 7) );
-		vTaskDelay(pdMS_TO_TICKS(500));
 
-		uint8_t LoAlert = readreg( STATUS1_REG );
-		ESP_LOGI( "LO ALERT", " alert status: 0x%X", LoAlert );
-		if ( (LoAlert & 1U) == 0 ) {
+		uint8_t IRQ = readreg( COM_IRQ_REG );
+		//ESP_LOGI( "LO ALERT", " alert status: 0x%X", LoAlert );
+		if ( (IRQ & (1U << 5)) > 0 ) {
 			ESP_LOGI( "RFID CARD", "CARD ATTACHED!!!" );
 			uint8_t fifolvl = readreg(FIFO_LEVEL_REG);
 			printf("fifo level: %d\n", (int8_t) fifolvl); 
