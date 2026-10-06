@@ -23,7 +23,7 @@
 #define STATUS1_REG			0x07
 #define FIFO_LEVEL_REG		0x0A
 #define BIT_FRAMING_REG		0x0D
-#define COM_IRQ_REG			0x04
+#define COMM_IRQ_REG			0x04
 
 /* commands */
 #define SOFT_RESET_CMD	0x0F
@@ -62,6 +62,10 @@ void writereg(uint8_t addr, uint8_t value) {
 	ESP_ERROR_CHECK( spi_device_polling_transmit(rc522_handle, &tr) );
 }
 
+
+
+/* reset functions */
+
 void soft_reset(void) {
 	writereg(MFRC522_REG_CMD, SOFT_RESET_CMD);
 	ESP_LOGI("RESET WAIT", "wait for 2sec ...");
@@ -77,14 +81,28 @@ void rc522_reset(void) {
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
+void commIrqReg_reset(void) {
+	writereg( COMM_IRQ_REG, 0x7F );
+	vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
 void rc522_start_modulate(void) {
 	uint8_t tx_cntr = readreg(TX_CTRL_REG);
 	writereg( TX_CTRL_REG, tx_cntr | 3U );	
 }
 
 void flush_fifo(void) {
-	uint8_t fifolvl = readreg(FIFO_LEVEL_REG);
-	writereg(FIFO_LEVEL_REG, fifolvl | ( 1 << 7));
+	writereg(FIFO_LEVEL_REG, 0x80);
+}
+
+static void rc522_init_regs(void) {
+    writereg(0x2A, 0x8D);
+    writereg(0x2B, 0x3E);
+    writereg(0x2C, 30);
+    writereg(0x2D, 0);
+    writereg(0x15, 0x40);
+    writereg(0x11, 0x3D);
+    rc522_start_modulate();
 }
 
 void app_main(void) {
@@ -136,23 +154,27 @@ void app_main(void) {
 	ESP_LOGI( "INITIAL", "version \tis 0x%02X",			version		);
 	ESP_LOGI( "INITIAL", "FIFODataReg[0] is 0x%02X",	fifo		);
 	ESP_LOGI( "INITIAL", "waterlevel \tis 0x%02X",		waterlevel	); 
-	rc522_start_modulate();
+	rc522_init_regs();
 
 	uint8_t fifodata[2];
 	while (1) {
 
 		flush_fifo();
+		commIrqReg_reset();
+		writereg( MFRC522_REG_CMD, 0X00 );
+		writereg( BIT_FRAMING_REG, 0x07 );
 		writereg( FIFO_DATA_REG, REQA );
 		writereg( MFRC522_REG_CMD, TRANSCEIVE_CMD ); 
-		writereg( BIT_FRAMING_REG, 0x07 | (1 << 7) );
+		writereg( BIT_FRAMING_REG, 0X87 );
 
-		uint8_t IRQ = readreg( COM_IRQ_REG );
-		//ESP_LOGI( "LO ALERT", " alert status: 0x%X", LoAlert );
+		vTaskDelay(pdMS_TO_TICKS(1000));
+
+		uint8_t IRQ = readreg( COMM_IRQ_REG );
 		if ( (IRQ & (1U << 5)) > 0 ) {
 			ESP_LOGI( "RFID CARD", "CARD ATTACHED!!!" );
 			uint8_t fifolvl = readreg(FIFO_LEVEL_REG);
 			printf("fifo level: %d\n", (int8_t) fifolvl); 
-			writereg(FIFO_LEVEL_REG, fifolvl | ( 1 << 7));
+			flush_fifo();
 		}
 		vTaskDelay(pdMS_TO_TICKS(1000));
 	}
