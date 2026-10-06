@@ -20,10 +20,13 @@
 #define TX_CTRL_REG			0x14
 #define	FIFO_DATA_REG		0x09 
 #define WATERLEVEL_REG		0x0B
+#define STATUS1_REG			0x07
+#define FIFO_LEVEL_REG		0x0A
 
 /* commands */
 #define SOFT_RESET_CMD	0x0F
 #define TRANSMIT_CMD	0x04
+#define TRANSCEIVE_CMD	0x0C
 #define REQA			0x26
 #define WUPA			0x52
 
@@ -77,6 +80,11 @@ void rc522_start_modulate(void) {
 	writereg( TX_CTRL_REG, tx_cntr | 3U );	
 }
 
+void flush_fifo(void) {
+	uint8_t fifolvl = readreg(FIFO_LEVEL_REG);
+	writereg(FIFO_LEVEL_REG, fifolvl | ( 1 << 7));
+}
+
 void app_main(void) {
 
 #ifdef RESET
@@ -118,6 +126,7 @@ void app_main(void) {
 	soft_reset();
 
 	writereg(WATERLEVEL_REG, 0x01);
+	flush_fifo();
 
 	uint8_t version		= readreg( MFRC522_REG_VERSION );
 	uint8_t fifo		= readreg( FIFO_DATA_REG ); 
@@ -130,14 +139,14 @@ void app_main(void) {
 	uint8_t fifodata[2];
 	while (1) {
 		writereg( FIFO_DATA_REG, REQA );
-		writereg( MFRC522_REG_CMD, TRANSMIT_CMD ); 
-		uint8_t LoAlert = readreg( WATERLEVEL_REG );
+		writereg( MFRC522_REG_CMD, TRANSCEIVE_CMD ); 
+		uint8_t LoAlert = readreg( STATUS1_REG );
 		ESP_LOGI( "LO ALERT", " alert status: 0x%X", LoAlert );
-		if ( (LoAlert % 2) == 0 ) {
+		if ( readreg(FIFO_LEVEL_REG) > 1 ) {
 			ESP_LOGI( "RFID CARD", "CARD ATTACHED!!!" );
-			fifodata[0] = readreg(FIFO_DATA_REG);	
-			fifodata[1] = readreg(FIFO_DATA_REG);	
-			ESP_LOGI( "RFID CARD", "card response: 0x%X 0x%X", fifodata[1], fifodata[0] );
+			uint8_t fifolvl = readreg(FIFO_LEVEL_REG);
+			printf("fifo level: %d\n", (int8_t) fifolvl); 
+			writereg(FIFO_LEVEL_REG, fifolvl | ( 1 << 7));
 		}
 		vTaskDelay(pdMS_TO_TICKS(1000));
 	}
