@@ -20,8 +20,32 @@
 #define FIFOLevelReg    0x0A
 #define WaterLevelReg   0x0B
 #define BitFramingReg   0x0D
+#define ModeReg         0x11
 #define TxControlReg    0x14
+#define TxASKReg        0x15
+#define TModeReg        0x2A
+#define TPrescalerReg   0x2B
+#define TReloadRegH     0x2C
+#define TReloadRegL     0x2D
 #define VersionReg	0x37
+
+/* RC522 register bits and values */
+#define TMODE_TAUTO             0x80	/* timer starts automatically after transmission */
+#define TPRESCALER_HI           0x0D	/* upper 4 bits of 12-bit TPrescaler */
+#define TPRESCALER_LO           0x3E	/* lower 8 bits of 12-bit TPrescaler */
+#define TRELOAD_HI		0 
+#define TRELOAD_LO              30
+#define TXASK_FORCE_100ASK      0x40	/* force 100% ASK modulation */
+#define MODE_TXWAITRF           0x20	/* transmitter starts only if RF field is on */
+#define MODE_RESERVED           0x14	/* reserved bits, keep at reset value */
+#define MODE_POLMFIN            0x08	/* MFIN pin polarity active HIGH */
+#define MODE_CRCPRESET_6363     0x01	/* CRC coprocessor preset 0x6363 (ISO 14443-3) */
+
+/* BitFraming flags */
+
+#define StartSend		0x80
+#define	RxAlign(align)		( align << 4 )
+#define TxLastBits(bits)	( bits ) 
 
 /* RC522 commands and PICC requests */
 #define IDLE_CMD	0x00
@@ -74,7 +98,7 @@ static void commIrqReg_reset(void)
 	vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-static void rc522_start_modulate(void)
+static void start_modulate(void)
 {
 	uint8_t tx_control = readreg(TxControlReg);
 	writereg(TxControlReg, tx_control | 3U);
@@ -132,15 +156,15 @@ static void initialize_spi(void)
 	ESP_ERROR_CHECK(spi_bus_add_device(SPIHOST, &device_config, &rc522_handle));
 }
 
-static void rc522_init_regs(void)
+static void init_regs(void)
 {
-	writereg(0x2A, 0x8D);
-	writereg(0x2B, 0x3E);
-	writereg(0x2C, 30);
-	writereg(0x2D, 0);
-	writereg(0x15, 0x40);
-	writereg(0x11, 0x3D);
-	rc522_start_modulate();
+	writereg(TModeReg, TMODE_TAUTO | TPRESCALER_HI);
+	writereg(TPrescalerReg, TPRESCALER_LO);
+	writereg(TReloadRegH, TRELOAD_HI);
+	writereg(TReloadRegL, TRELOAD_LO);
+	writereg(TxASKReg, TXASK_FORCE_100ASK);
+	writereg(ModeReg, MODE_TXWAITRF | MODE_RESERVED | MODE_POLMFIN | MODE_CRCPRESET_6363);
+	start_modulate();
 }
 
 static void initialize_rc522(void)
@@ -156,7 +180,7 @@ static void initialize_rc522(void)
 	ESP_LOGI("INITIAL", "FIFODataReg[0] is 0x%02X", fifo);
 	ESP_LOGI("INITIAL", "waterlevel \tis 0x%02X", waterlevel);
 
-	rc522_init_regs();
+	init_regs();
 }
 
 /* Card polling */
@@ -164,11 +188,11 @@ static void request_card(void)
 {
 	flush_fifo();
 	commIrqReg_reset();
-	writereg(CommandReg, IDLE_CMD);
-	writereg(BitFramingReg, 0x07);
-	writereg(FIFODataReg, REQA);
-	writereg(CommandReg, TRANSCEIVE_CMD);
-	writereg(BitFramingReg, 0x87);
+
+	writereg(	CommandReg, IDLE_CMD				);
+	writereg(	FIFODataReg, REQA				);
+	writereg(	CommandReg, TRANSCEIVE_CMD			);
+	writereg(	BitFramingReg, StartSend | TxLastBits(7)	);
 
 	vTaskDelay(pdMS_TO_TICKS(1000));
 
@@ -179,6 +203,7 @@ static void request_card(void)
 		printf("fifo level: %d\n", (int8_t)fifo_level);
 		flush_fifo();
 	}
+
 	vTaskDelay(pdMS_TO_TICKS(1000));
 }
 

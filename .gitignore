@@ -2,3 +2,6 @@ build/
 wirecolorconfig.txt
 *.swp
 *.vimrc
+LEARNING.md
+CLAUDE.md
+*.old
