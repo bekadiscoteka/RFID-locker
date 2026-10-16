@@ -7,8 +7,12 @@
 #include "driver/spi_common.h"
 #include "driver/spi_master.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#define waitsec(sec)	( vTaskDelay(pdMS_TO_TICKS( (sec) * 1000)) )
+#define NOW		( esp_timer_get_time() )
 
 /* SPI bus */
 #define SPIHOST SPI3_HOST
@@ -65,7 +69,6 @@ static uint8_t readreg(uint8_t addr)
 		.length = 16,
 	};
 
-	ESP_LOGI("SPI_DEBUG", "Target Reg: 0x%02X, Formatted Tx Byte: 0x%02X", addr, formatted_addr);
 	ESP_ERROR_CHECK(spi_device_polling_transmit(rc522_handle, &transaction));
 	return transaction.rx_data[1];
 }
@@ -86,7 +89,7 @@ static void writereg(uint8_t addr, uint8_t value)
 static void soft_reset(void)
 {
 	writereg(CommandReg, SOFT_RESET_CMD);
-	ESP_LOGI("RESET WAIT", "wait for 2sec ...");
+	ESP_LOGI("RESET WAIT", "waitsec for 2sec ...");
 	vTaskDelay(pdMS_TO_TICKS(2000));
 	ESP_LOGI("RESET WAIT", "done!");
 	vTaskDelay(pdMS_TO_TICKS(2000));
@@ -95,13 +98,14 @@ static void soft_reset(void)
 static void commIrqReg_reset(void)
 {
 	writereg(ComIrqReg, 0x7F);
-	vTaskDelay(pdMS_TO_TICKS(1000));
+	//vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
+#define Tx1RFEn 1U
+#define Tx2RFEn 2U
 static void start_modulate(void)
 {
-	uint8_t tx_control = readreg(TxControlReg);
-	writereg(TxControlReg, tx_control | 3U);
+	writereg(TxControlReg, readreg(TxControlReg) | Tx1RFEn | Tx2RFEn);
 }
 
 static void flush_fifo(void)
@@ -184,6 +188,12 @@ static void initialize_rc522(void)
 }
 
 /* Card polling */
+#define TxIRq_MASK	( 1U << 6 )
+#define RxIRq_MASK	( 1U << 5 )
+
+#define TimerIRq_MASK	( 1U )
+#define ErrIRq_MASK	( 2U )
+
 static void request_card(void)
 {
 	flush_fifo();
@@ -194,17 +204,34 @@ static void request_card(void)
 	writereg(	CommandReg, TRANSCEIVE_CMD			);
 	writereg(	BitFramingReg, StartSend | TxLastBits(7)	);
 
-	vTaskDelay(pdMS_TO_TICKS(1000));
+	int64_t deadline = NOW + (50 * 1000);
+	while (1) {
+		uint8_t irq = readreg(ComIrqReg);
 
-	uint8_t irq = readreg(ComIrqReg);
-	if ((irq & (1U << 5)) > 0) {
-		ESP_LOGI("RFID CARD", "CARD ATTACHED!!!");
-		uint8_t fifo_level = readreg(FIFOLevelReg);
-		printf("fifo level: %d\n", (int8_t)fifo_level);
-		flush_fifo();
+		if (irq & ErrIRq_MASK) {
+			ESP_LOGE("ERROR IRq", "Error on communication");
+			break;
+		}
+
+		if (irq & TxIRq_MASK) 
+			ESP_LOGV("TRANSCEIVE", "Transaction was sent successfully");
+
+		if (irq & RxIRq_MASK) {
+			ESP_LOGI("RESPONSE", "Reader received message!");
+			break;
+		}
+
+		if (irq & TimerIRq_MASK) {
+			ESP_LOGW("TIMER", "Timer is out, no response");
+			break;
+		}
+
+		if (NOW == deadline) 
+			break;
+		
 	}
 
-	vTaskDelay(pdMS_TO_TICKS(1000));
+	waitsec(1);
 }
 
 void app_main(void)
