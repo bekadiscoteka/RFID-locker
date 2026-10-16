@@ -174,15 +174,9 @@ static void init_regs(void)
 static void initialize_rc522(void)
 {
 	soft_reset();
-	writereg(WaterLevelReg, 0x01);
-	flush_fifo();
 
 	uint8_t version = readreg(VersionReg);
-	uint8_t fifo = readreg(FIFODataReg);
-	uint8_t waterlevel = readreg(WaterLevelReg);
-	ESP_LOGI("INITIAL", "version \tis 0x%02X", version);
-	ESP_LOGI("INITIAL", "FIFODataReg[0] is 0x%02X", fifo);
-	ESP_LOGI("INITIAL", "waterlevel \tis 0x%02X", waterlevel);
+	ESP_LOGI("INFO", "version \tis 0x%02X", version);
 
 	init_regs();
 }
@@ -222,12 +216,14 @@ static void request_card(void)
 		}
 
 		if (irq & TimerIRq_MASK) {
-			ESP_LOGW("TIMER", "Timer is out, no response");
+			ESP_LOGD("READER TIMER", "Reader didn't find any device");
 			break;
 		}
 
-		if (NOW == deadline) 
+		if (NOW == deadline) {
+			ESP_LOGE("ESP timer", "Timer is out, reader is not responding");
 			break;
+		}
 		
 	}
 
