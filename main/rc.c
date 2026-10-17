@@ -11,6 +11,9 @@
 #define waitsec(sec)	( vTaskDelay(pdMS_TO_TICKS( (sec) * 1000)) )
 #define NOW		( esp_timer_get_time() )
 
+#define MIN(a, b)	( a <= b ? a : b )
+#define MAX(a, b)	( a >= b ? a : b )
+
 
 /* RC522 registers */
 #define CommandReg      0x01
@@ -130,33 +133,45 @@ static void initialize_rc522(void)
 	init_regs();
 }
 
-/* Card polling */
+/*
+ *	TRANSCEIVE COMMAND:
+ *	transmits your data with reader to environment
+ *	and then automatically waits for response
+ *	
+ *	flushes FIFO, resets ComIRqReg 
+*/
+#define FIFOSIZE UINT8_MAX
+
 #define TxIRq_MASK	( 1U << 6 )
 #define RxIRq_MASK	( 1U << 5 )
 
 #define TimerIRq_MASK	( 1U )
 #define ErrIRq_MASK	( 2U )
 
-typedef enum {RC_RSP, RC_NORSP, RC_ERR} rc_status_t;
+typedef enum {RC_OK, RC_NORESP, RC_ERR, RC_WRN} rc_status_t;
 
-static rc_status_t request_card(uint8_t atqa[])
-{
+static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_bits,
+			uint8_t *rx, size_t rx_len) {
+	assert( tx_len <= FIFOSIZE );
+
 	flush_fifo();
 	commIrqReg_reset();
-
-	writereg(	CommandReg, IDLE_CMD				);
-	writereg(	FIFODataReg, REQA				);
-	writereg(	CommandReg, TRANSCEIVE_CMD			);
-	writereg(	BitFramingReg, StartSend | TxLastBits(7)	);
-
-	rc_status_t s = RC_ERR;
+	
+	writereg(CommandReg, IDLE_CMD);
+	for (size_t i=0; i < tx_len; i++) 
+		writereg( FIFODataReg, *(tx+i) );
+	writereg( CommandReg,	TRANSCEIVE_CMD);
+	writereg( BitFramingReg, StartSend | TxLastBits(tx_last_bits));
+	
+	rc_status_t status = RC_ERR; /* pessimistic approach */ 
 	int64_t deadline = NOW + (50 * 1000);
-	while (1) {
+	do {
 		uint8_t irq = readreg(ComIrqReg);
 
 		if (irq & ErrIRq_MASK) {
-			ESP_LOGE("ERROR IRq", "Error on communication");
-			s = RC_ERR;
+			ESP_LOGE("ERROR IRq", "Error occured");
+
+		status = RC_ERR;
 			break;
 		}
 
@@ -164,33 +179,65 @@ static rc_status_t request_card(uint8_t atqa[])
 			ESP_LOGV("TRANSCEIVE", "Transaction was sent successfully");
 
 		if (irq & RxIRq_MASK) {
-			if ( readreg(FIFOLevelReg) != (uint8_t)ATQA_SIZE ) {
-				ESP_LOGW("CARD", "Unsupported card");
-				s = RC_ERR;
-				break;
+		status = RC_OK;
+
+			uint8_t fifolen = readreg(FIFOLevelReg);
+			if (fifolen > rx_len) {
+			status = RC_WRN;
+				ESP_LOGW("TRANSCEIVE", "rx_len is smaller than the received data's length");
 			}
-			s = RC_RSP;
-			atqa[0] = readreg( FIFODataReg );
-			atqa[1] = readreg( FIFODataReg );
+
+			for (size_t i=0; i < MIN(fifolen, rx_len); i++) 
+				rx[i] = readreg( FIFODataReg );
+
 			break;
 		}
 
 		if (irq & TimerIRq_MASK) {
 			ESP_LOGD("READER TIMER", "Reader didn't find any device");
-			s = RC_NORSP;
+		status = RC_NORESP;
 			break;
 		}
+	} 
+	while ( deadline > NOW );
+	
+	return status;
+}
 
-		if (NOW >= deadline) {
-			ESP_LOGE("ESP timer", "Timer is out, reader is not responding");
-			s = RC_ERR;	
-			break;
-		}
-		
+/* decode 7-6 bits of first ATQA byte */
+static int atqa_uid_decode(uint8_t atqa0) {
+	
+	uint8_t uidlen_code = atqa0 >> 6;
+
+	size_t uidlen = 0;
+	switch (uidlen_code) {
+		case 0: uidlen=4; break;
+		case 1: uidlen=7; break;
+		case 2: uidlen=10; break;
+		default: ESP_LOGI("CARD", "Unsupported card"); break;
+	}
+	return uidlen;
+}
+
+/* 
+ * request for answer from environment (is there anybody here?) 
+*/
+static int request_card(void)
+{
+	uint8_t reqa = REQA;		
+	uint8_t atqa[2];
+
+	int uidlen=0;
+	rc_status_t status = transceive( &reqa, 1, 7, atqa, 2 );
+	switch (status) {
+		case RC_WRN:	ESP_LOGW("request_card", "pay attention to last warnings from transceive!"); break;
+		case RC_OK:	uidlen = atqa_uid_decode(atqa[0]); break;
+		case RC_NORESP: uidlen = 0; break;
+		case RC_ERR: 	uidlen = -1; break;	
+		default:	ESP_LOGE("request_card", "Unsupported status: %d", status); break;
 	}
 
-	return s;
-
+	return uidlen;
 }
 
 void app_main(void)
@@ -198,24 +245,14 @@ void app_main(void)
 	configure_reset_pin();
 	initialize_spi();
 	initialize_rc522();
-	rc_status_t status;
-	uint8_t atqa[ATQA_SIZE];
+
+	int uidlen;
 
 	while (1) {
-		status = request_card(atqa);
-		if (status == RC_RSP) {
-			uint8_t uidlen_code = atqa[0] >> 6;
-			size_t uidlen;
-			switch (uidlen_code) {
-				case 0: uidlen=4; break;
-				case 1: uidlen=7; break;
-				case 2: uidlen=10; break;
-				default: assert(0);
-			}
+		uidlen = request_card();
+		if (uidlen > 0) 
+			ESP_LOGI("ATQA response", "UID size: %d bytes", uidlen);
 
-			ESP_LOGI("ATQA response", "UID size: %zu bytes", uidlen);
-			ESP_LOGI("ATQA response", "%02X %02X\n", atqa[1], atqa[0]);
-		}
 		waitsec(1);
 	}
 
