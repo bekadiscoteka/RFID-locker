@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "rc522_spi.h"
 
+#define SPIHOST SPI3_HOST
 
 static spi_device_handle_t rc522_handle;
 

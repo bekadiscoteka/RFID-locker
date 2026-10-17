@@ -149,9 +149,8 @@ static rc_status_t request_card(uint8_t atqa[])
 	writereg(	CommandReg, TRANSCEIVE_CMD			);
 	writereg(	BitFramingReg, StartSend | TxLastBits(7)	);
 
-	int64_t deadline = NOW + (50 * 1000);
-	
 	rc_status_t s = RC_ERR;
+	int64_t deadline = NOW + (50 * 1000);
 	while (1) {
 		uint8_t irq = readreg(ComIrqReg);
 
@@ -165,8 +164,11 @@ static rc_status_t request_card(uint8_t atqa[])
 			ESP_LOGV("TRANSCEIVE", "Transaction was sent successfully");
 
 		if (irq & RxIRq_MASK) {
-			assert( readreg(FIFOLevelReg) == (uint8_t)2 );
-			ESP_LOGI("RESPONSE", "Reader received message!");
+			if ( readreg(FIFOLevelReg) != (uint8_t)ATQA_SIZE ) {
+				ESP_LOGW("CARD", "Unsupported card");
+				s = RC_ERR;
+				break;
+			}
 			s = RC_RSP;
 			atqa[0] = readreg( FIFODataReg );
 			atqa[1] = readreg( FIFODataReg );
@@ -179,7 +181,7 @@ static rc_status_t request_card(uint8_t atqa[])
 			break;
 		}
 
-		if (NOW == deadline) {
+		if (NOW >= deadline) {
 			ESP_LOGE("ESP timer", "Timer is out, reader is not responding");
 			s = RC_ERR;	
 			break;
@@ -197,13 +199,11 @@ void app_main(void)
 	initialize_spi();
 	initialize_rc522();
 	rc_status_t status;
-	uint8_t atqa[2];
+	uint8_t atqa[ATQA_SIZE];
 
 	while (1) {
 		status = request_card(atqa);
 		if (status == RC_RSP) {
-			ESP_LOGI("ATQA response", "%x%x\n", atqa[1], atqa[0]);
-
 			uint8_t uidlen_code = atqa[0] >> 6;
 			size_t uidlen;
 			switch (uidlen_code) {
@@ -214,6 +214,7 @@ void app_main(void)
 			}
 
 			ESP_LOGI("ATQA response", "UID size: %zu bytes", uidlen);
+			ESP_LOGI("ATQA response", "%02X %02X\n", atqa[1], atqa[0]);
 		}
 		waitsec(1);
 	}
