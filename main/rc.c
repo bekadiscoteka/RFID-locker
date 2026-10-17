@@ -1,21 +1,16 @@
 #include <stdint.h>
 #include <stdio.h>
-
-#include "pincfg.h"
-
 #include "driver/gpio.h"
-#include "driver/spi_common.h"
-#include "driver/spi_master.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "rc522_spi.h"
+
 #define waitsec(sec)	( vTaskDelay(pdMS_TO_TICKS( (sec) * 1000)) )
 #define NOW		( esp_timer_get_time() )
 
-/* SPI bus */
-#define SPIHOST SPI3_HOST
 
 /* RC522 registers */
 #define CommandReg      0x01
@@ -56,34 +51,8 @@
 #define SOFT_RESET_CMD  0x0F
 #define TRANSCEIVE_CMD  0x0C
 #define REQA            0x26
+#define ATQA_SIZE	2
 
-static spi_device_handle_t rc522_handle;
-
-/* Register access */
-static uint8_t readreg(uint8_t addr)
-{
-	uint8_t formatted_addr = ((addr << 1) & ~1U) | 0x80;
-	spi_transaction_t transaction = {
-		.flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_USE_RXDATA,
-		.tx_data = { formatted_addr, 0x00 },
-		.length = 16,
-	};
-
-	ESP_ERROR_CHECK(spi_device_polling_transmit(rc522_handle, &transaction));
-	return transaction.rx_data[1];
-}
-
-static void writereg(uint8_t addr, uint8_t value)
-{
-	uint8_t formatted_addr = (addr << 1) & ~0x80;
-	spi_transaction_t transaction = {
-		.flags = SPI_TRANS_USE_TXDATA,
-		.tx_data = { formatted_addr, value },
-		.length = 16,
-	};
-
-	ESP_ERROR_CHECK(spi_device_polling_transmit(rc522_handle, &transaction));
-}
 
 /* Reset, FIFO, and modulation helpers */
 static void soft_reset(void)
@@ -139,26 +108,6 @@ static void configure_reset_pin(void)
 #endif
 }
 
-static void initialize_spi(void)
-{
-	spi_bus_config_t bus_config = {
-		.mosi_io_num = MOSI,
-		.miso_io_num = MISO,
-		.sclk_io_num = SCLK,
-		.quadhd_io_num = -1,
-		.quadwp_io_num = -1,
-		.max_transfer_sz = 64,
-	};
-	spi_device_interface_config_t device_config = {
-		.mode = 0,
-		.clock_speed_hz = 5 * 1000 * 1000,
-		.spics_io_num = SS,
-		.queue_size = 5,
-	};
-
-	ESP_ERROR_CHECK(spi_bus_initialize(SPIHOST, &bus_config, SPI_DMA_CH_AUTO));
-	ESP_ERROR_CHECK(spi_bus_add_device(SPIHOST, &device_config, &rc522_handle));
-}
 
 static void init_regs(void)
 {
@@ -188,7 +137,9 @@ static void initialize_rc522(void)
 #define TimerIRq_MASK	( 1U )
 #define ErrIRq_MASK	( 2U )
 
-static void request_card(void)
+typedef enum {RC_RSP, RC_NORSP, RC_ERR} rc_status_t;
+
+static rc_status_t request_card(uint8_t atqa[])
 {
 	flush_fifo();
 	commIrqReg_reset();
@@ -199,11 +150,14 @@ static void request_card(void)
 	writereg(	BitFramingReg, StartSend | TxLastBits(7)	);
 
 	int64_t deadline = NOW + (50 * 1000);
+	
+	rc_status_t s = RC_ERR;
 	while (1) {
 		uint8_t irq = readreg(ComIrqReg);
 
 		if (irq & ErrIRq_MASK) {
 			ESP_LOGE("ERROR IRq", "Error on communication");
+			s = RC_ERR;
 			break;
 		}
 
@@ -211,23 +165,30 @@ static void request_card(void)
 			ESP_LOGV("TRANSCEIVE", "Transaction was sent successfully");
 
 		if (irq & RxIRq_MASK) {
+			assert( readreg(FIFOLevelReg) == (uint8_t)2 );
 			ESP_LOGI("RESPONSE", "Reader received message!");
+			s = RC_RSP;
+			atqa[0] = readreg( FIFODataReg );
+			atqa[1] = readreg( FIFODataReg );
 			break;
 		}
 
 		if (irq & TimerIRq_MASK) {
 			ESP_LOGD("READER TIMER", "Reader didn't find any device");
+			s = RC_NORSP;
 			break;
 		}
 
 		if (NOW == deadline) {
 			ESP_LOGE("ESP timer", "Timer is out, reader is not responding");
+			s = RC_ERR;	
 			break;
 		}
 		
 	}
 
-	waitsec(1);
+	return s;
+
 }
 
 void app_main(void)
@@ -235,9 +196,26 @@ void app_main(void)
 	configure_reset_pin();
 	initialize_spi();
 	initialize_rc522();
+	rc_status_t status;
+	uint8_t atqa[2];
 
 	while (1) {
-		request_card();
+		status = request_card(atqa);
+		if (status == RC_RSP) {
+			ESP_LOGI("ATQA response", "%x%x\n", atqa[1], atqa[0]);
+
+			uint8_t uidlen_code = atqa[0] >> 6;
+			size_t uidlen;
+			switch (uidlen_code) {
+				case 0: uidlen=4; break;
+				case 1: uidlen=7; break;
+				case 2: uidlen=10; break;
+				default: assert(0);
+			}
+
+			ESP_LOGI("ATQA response", "UID size: %zu bytes", uidlen);
+		}
+		waitsec(1);
 	}
 
 }
