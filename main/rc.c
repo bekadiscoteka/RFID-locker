@@ -53,8 +53,12 @@
 #define IDLE_CMD	0x00
 #define SOFT_RESET_CMD  0x0F
 #define TRANSCEIVE_CMD  0x0C
+
 #define REQA            0x26
 #define ATQA_SIZE	2
+#define SEL1		0x93
+#define SEL2		0x95
+#define SEL3		0x97
 
 
 /* Reset, FIFO, and modulation helpers */
@@ -148,7 +152,7 @@ static void initialize_rc522(void)
 #define TimerIRq_MASK	( 1U )
 #define ErrIRq_MASK	( 2U )
 
-typedef enum {RC_OK, RC_NORESP, RC_ERR, RC_WRN} rc_status_t;
+typedef enum {RC_OK, RC_NORESP, RC_ERR, RC_WARN} rc_status_t;
 
 static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_bits,
 			uint8_t *rx, size_t rx_len) {
@@ -183,7 +187,7 @@ static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_
 
 			uint8_t fifolen = readreg(FIFOLevelReg);
 			if (fifolen > rx_len) {
-			status = RC_WRN;
+			status = RC_WARN;
 				ESP_LOGW("TRANSCEIVE", "rx_len is smaller than the received data's length");
 			}
 
@@ -222,22 +226,40 @@ static int atqa_uid_decode(uint8_t atqa0) {
 /* 
  * request for answer from environment (is there anybody here?) 
 */
-static int request_card(void)
+static int request_card(int *uidlen)
 {
 	uint8_t reqa = REQA;		
 	uint8_t atqa[2];
 
-	int uidlen=0;
 	rc_status_t status = transceive( &reqa, 1, 7, atqa, 2 );
+
 	switch (status) {
-		case RC_WRN:	ESP_LOGW("request_card", "pay attention to last warnings from transceive!"); break;
-		case RC_OK:	uidlen = atqa_uid_decode(atqa[0]); break;
-		case RC_NORESP: uidlen = 0; break;
-		case RC_ERR: 	uidlen = -1; break;	
+		case RC_WARN:	ESP_LOGW("request_card", "pay attention to last warnings from transceive!"); break;
+		case RC_OK:	*uidlen = atqa_uid_decode(atqa[0]); break;
+		case RC_NORESP: break;
+		case RC_ERR: 	break;	
 		default:	ESP_LOGE("request_card", "Unsupported status: %d", status); break;
 	}
 
-	return uidlen;
+	return status; 
+}
+
+#define BCC 5
+static rc_status_t read_uid(uint8_t uid[]) {
+	uint8_t anticoll[2] = { SEL1, 0x20 };
+	rc_status_t status = transceive(anticoll, 2, 0, uid, BCC);	
+	if (status == RC_ERR) {
+		ESP_LOGE("UID READ", "Potential collision");
+		return status;
+	}
+	
+	uint8_t xor = uid[0];
+	for (int i=1; i < BCC-1; i++)
+		xor ^= uid[i];	
+	
+	if (xor == uid[BCC-1]) 
+		ESP_LOGI("BCC STATUS", "BCC successfully passed");
+	return RC_OK;
 }
 
 void app_main(void)
@@ -247,11 +269,19 @@ void app_main(void)
 	initialize_rc522();
 
 	int uidlen;
+	uint8_t uid[5];
+	rc_status_t status;
 
 	while (1) {
-		uidlen = request_card();
-		if (uidlen > 0) 
+		status = request_card(&uidlen);
+		if (status == RC_OK) {
 			ESP_LOGI("ATQA response", "UID size: %d bytes", uidlen);
+
+			status = read_uid(uid);
+			if (status == RC_OK) 
+				ESP_LOGI("UID", "detected UID: %02X %02X %02X %02X", uid[0], uid[1], uid[2], uid[3]);
+		}
+		
 
 		waitsec(1);
 	}
