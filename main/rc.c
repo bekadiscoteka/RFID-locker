@@ -147,20 +147,15 @@ static void initialize_rc522(void)
 
 typedef enum {RC_OK, RC_NORESP, RC_ERR, RC_WARN, RC_COLL} rc_status_t;
 
-static rc_status_t readfifo(uint8_t rx[], size_t rxlen) {
-
-	rc_status_t status = RC_OK;
+static size_t readfifo(uint8_t rx[], size_t rxlen) {
 
 	uint8_t fifolen = readreg(FIFOLevelReg);
-	if (fifolen > rxlen) {
-		status = RC_WARN;
-		ESP_LOGW("TRANSCEIVE", "rxlen is smaller than the received data's length");
-	}
-
-	for (size_t i=0; i < MIN(fifolen, rxlen); i++) 
+	
+	size_t size = MIN(fifolen, rxlen);
+	for (size_t i=0; i < size; i++) 
 		rx[i] = readreg( FIFODataReg );
 
-	return status;
+	return size;
 }
 
 /*
@@ -215,7 +210,7 @@ static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_
 
 		if (irq & RxIRq_MASK) {
 
-			status = readfifo(rx, rx_len);
+			status = readfifo(rx, rx_len) > 0 ? RC_OK : RC_ERR;
 
 			break;
 		}
@@ -264,6 +259,9 @@ static int request_card(int *uidlen)
 		default:	ESP_LOGE("request_card", "Unsupported status: %d", status); break;
 	}
 
+	if (*uidlen == 0)
+		return RC_ERR;
+
 	return status; 
 }
 
@@ -297,12 +295,12 @@ static rc_status_t read_uid4(uint8_t uid[4])
 	uint8_t xor = *buf;
 	for (size_t i=1; i < LVLSIZE-1; i++)
 		xor ^= buf[i];
-	if (xor != buf[LVLSIZE]) 
+	if (xor != buf[LVLSIZE-1]) 
 		status = RC_ERR;
 
 	memcpy(uid, buf, LVLSIZE-1);
 
-        return RC_OK;
+        return status;
 }
 
 void app_main(void)
