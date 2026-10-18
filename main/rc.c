@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <string.h>
 #include <stdio.h>
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -30,6 +31,8 @@
 #define TReloadRegH     0x2C
 #define TReloadRegL     0x2D
 #define VersionReg	0x37
+#define ErrorReg	0x06
+#define CollReg		0x0E
 
 /* RC522 register bits and values */
 #define TMODE_TAUTO             0x80	/* timer starts automatically after transmission */
@@ -55,6 +58,7 @@
 #define TRANSCEIVE_CMD  0x0C
 
 #define REQA            0x26
+#define REQA_SIZE	1
 #define ATQA_SIZE	2
 #define SEL1		0x93
 #define SEL2		0x95
@@ -138,6 +142,28 @@ static void initialize_rc522(void)
 }
 
 /*
+ * Extract full content of FIFO buffer
+*/
+
+typedef enum {RC_OK, RC_NORESP, RC_ERR, RC_WARN, RC_COLL} rc_status_t;
+
+static rc_status_t readfifo(uint8_t rx[], size_t rxlen) {
+
+	rc_status_t status = RC_OK;
+
+	uint8_t fifolen = readreg(FIFOLevelReg);
+	if (fifolen > rxlen) {
+		status = RC_WARN;
+		ESP_LOGW("TRANSCEIVE", "rxlen is smaller than the received data's length");
+	}
+
+	for (size_t i=0; i < MIN(fifolen, rxlen); i++) 
+		rx[i] = readreg( FIFODataReg );
+
+	return status;
+}
+
+/*
  *	TRANSCEIVE COMMAND:
  *	transmits your data with reader to environment
  *	and then automatically waits for response
@@ -151,8 +177,9 @@ static void initialize_rc522(void)
 
 #define TimerIRq_MASK	( 1U )
 #define ErrIRq_MASK	( 2U )
+#define CollErr_MASK	( 1 << 3 )
+#define FULL		0
 
-typedef enum {RC_OK, RC_NORESP, RC_ERR, RC_WARN} rc_status_t;
 
 static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_bits,
 			uint8_t *rx, size_t rx_len) {
@@ -174,8 +201,12 @@ static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_
 
 		if (irq & ErrIRq_MASK) {
 			ESP_LOGE("ERROR IRq", "Error occured");
-
-		status = RC_ERR;
+			if (readreg(ErrorReg) & CollErr_MASK) {
+				readfifo(rx, rx_len);
+				status = RC_COLL;
+			} 
+			else 
+				status = RC_ERR;
 			break;
 		}
 
@@ -183,23 +214,15 @@ static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_
 			ESP_LOGV("TRANSCEIVE", "Transaction was sent successfully");
 
 		if (irq & RxIRq_MASK) {
-		status = RC_OK;
 
-			uint8_t fifolen = readreg(FIFOLevelReg);
-			if (fifolen > rx_len) {
-			status = RC_WARN;
-				ESP_LOGW("TRANSCEIVE", "rx_len is smaller than the received data's length");
-			}
-
-			for (size_t i=0; i < MIN(fifolen, rx_len); i++) 
-				rx[i] = readreg( FIFODataReg );
+			status = readfifo(rx, rx_len);
 
 			break;
 		}
 
 		if (irq & TimerIRq_MASK) {
 			ESP_LOGD("READER TIMER", "Reader didn't find any device");
-		status = RC_NORESP;
+			status = RC_NORESP;
 			break;
 		}
 	} 
@@ -231,7 +254,7 @@ static int request_card(int *uidlen)
 	uint8_t reqa = REQA;		
 	uint8_t atqa[2];
 
-	rc_status_t status = transceive( &reqa, 1, 7, atqa, 2 );
+	rc_status_t status = transceive( &reqa, REQA_SIZE, 7, atqa, ATQA_SIZE );
 
 	switch (status) {
 		case RC_WARN:	ESP_LOGW("request_card", "pay attention to last warnings from transceive!"); break;
@@ -244,22 +267,42 @@ static int request_card(int *uidlen)
 	return status; 
 }
 
+/*
+ * Collision logic
+*/
+
 #define BCC 5
-static rc_status_t read_uid(uint8_t uid[]) {
-	uint8_t anticoll[2] = { SEL1, 0x20 };
-	rc_status_t status = transceive(anticoll, 2, 0, uid, BCC);	
-	if (status == RC_ERR) {
-		ESP_LOGE("UID READ", "Potential collision");
-		return status;
-	}
-	
-	uint8_t xor = uid[0];
-	for (int i=1; i < BCC-1; i++)
-		xor ^= uid[i];	
-	
-	if (xor == uid[BCC-1]) 
-		ESP_LOGI("BCC STATUS", "BCC successfully passed");
-	return RC_OK;
+#define CollPos_MASK		( ~(0xFF << 5)	)
+#define CollPosNotValid_MASK	( 0x01 << 5	) 
+
+#define ISVALID(reg)		( reg & CollPosNotValid_MASK	)
+#define COLLPOS(reg)		( reg & CollPos_MASK		)
+
+#define LVLSIZE			5
+#define CT			0x88
+
+
+static rc_status_t read_uid4(uint8_t uid[4])
+{
+        uint8_t cmd[2] = { SEL1, 0x20 };
+        uint8_t buf[LVLSIZE];               
+
+        rc_status_t status = transceive(cmd, 2, 0, buf, LVLSIZE);
+        if (status != RC_OK)
+                return status;
+
+        if (buf[0] == CT)
+                return RC_ERR;                
+
+	uint8_t xor = *buf;
+	for (size_t i=1; i < LVLSIZE-1; i++)
+		xor ^= buf[i];
+	if (xor != buf[LVLSIZE]) 
+		status = RC_ERR;
+
+	memcpy(uid, buf, LVLSIZE-1);
+
+        return RC_OK;
 }
 
 void app_main(void)
@@ -277,7 +320,7 @@ void app_main(void)
 		if (status == RC_OK) {
 			ESP_LOGI("ATQA response", "UID size: %d bytes", uidlen);
 
-			status = read_uid(uid);
+			status = read_uid4(uid);
 			if (status == RC_OK) 
 				ESP_LOGI("UID", "detected UID: %02X %02X %02X %02X", uid[0], uid[1], uid[2], uid[3]);
 		}
