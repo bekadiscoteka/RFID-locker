@@ -8,6 +8,10 @@ There's no physical lock yet. Every decision goes through one function,
 `access_event()`, so a lock, buzzer or MQTT message can be connected there
 later without touching the rest.
 
+## Demo
+
+[![RFID access controller demo](https://img.youtube.com/vi/9gEip2SYgsY/hqdefault.jpg)](https://youtu.be/9gEip2SYgsY)
+
 ## Quick start
 
 ```sh
