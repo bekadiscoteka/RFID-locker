@@ -6,32 +6,17 @@
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 #include "accesslog.h"
-#include "admin_secrets.h"
 #include "cards.h"
+#include "uid.h"
 #include "web.h"
 
 static const char *TAG = "web";
 
 /* index.html, linked into the firmware by EMBED_TXTFILES (null-terminated). */
 extern const char index_html[] asm("_binary_index_html_start");
-
-/* "DEADBEEF" -> { 0xDE, 0xAD, 0xBE, 0xEF }. Exactly 8 hex digits. */
-static bool parse_uid(const char *s, uint8_t uid[RC522_UID_LEN])
-{
-	if (strlen(s) != 2 * RC522_UID_LEN)
-		return false;
-	for (size_t i = 0; i < 2 * RC522_UID_LEN; i++)
-		if (!isxdigit((unsigned char)s[i]))
-			return false;
-
-	for (size_t i = 0; i < RC522_UID_LEN; i++) {
-		char byte[3] = { s[2 * i], s[2 * i + 1], '\0' };
-		uid[i] = strtol(byte, NULL, 16);
-	}
-	return true;
-}
 
 /* Decode a form value in place: '+' -> ' ', "%XX" -> byte. */
 static void url_decode(char *s)
@@ -51,12 +36,14 @@ static void url_decode(char *s)
 	*out = '\0';
 }
 
-/* Changes need the admin password in the X-Password header. Sends 401 if not. */
+/* Changes need the admin password in the X-Password header. Sends 401 if not.
+ * With no password set in menuconfig, every change is refused. */
 static bool authorized(httpd_req_t *req)
 {
 	char pass[64];
-	if (httpd_req_get_hdr_value_str(req, "X-Password", pass, sizeof pass) == ESP_OK &&
-	    strcmp(pass, ADMIN_PASS) == 0)
+	if (CONFIG_APP_ADMIN_PASSWORD[0] != '\0' &&
+	    httpd_req_get_hdr_value_str(req, "X-Password", pass, sizeof pass) == ESP_OK &&
+	    strcmp(pass, CONFIG_APP_ADMIN_PASSWORD) == 0)
 		return true;
 
 	httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Wrong admin password");
@@ -98,10 +85,10 @@ static esp_err_t get_log(httpd_req_t *req)
 	httpd_resp_sendstr_chunk(req, buf);
 
 	for (size_t i = 0; i < n; i++) {
-		snprintf(buf, sizeof buf, "%s{\"t\":%lld,\"uid\":\"%02X%02X%02X%02X\",\"ok\":%s}",
-			 i ? "," : "", (long long)e[i].time,
-			 e[i].uid[0], e[i].uid[1], e[i].uid[2], e[i].uid[3],
-			 e[i].granted ? "true" : "false");
+		char hex[UID_HEX_LEN];
+		uid_to_hex(e[i].uid, hex);
+		snprintf(buf, sizeof buf, "%s{\"t\":%lld,\"uid\":\"%s\",\"ok\":%s}",
+			 i ? "," : "", (long long)e[i].time, hex, e[i].granted ? "true" : "false");
 		httpd_resp_sendstr_chunk(req, buf);
 	}
 
@@ -120,9 +107,10 @@ static esp_err_t get_cards(httpd_req_t *req)
 	httpd_resp_sendstr_chunk(req, "{\"cards\":[");
 
 	for (size_t i = 0; i < n; i++) {
-		snprintf(buf, sizeof buf, "%s{\"uid\":\"%02X%02X%02X%02X\",\"name\":\"%s\"}",
-			 i ? "," : "", c[i].uid[0], c[i].uid[1], c[i].uid[2], c[i].uid[3],
-			 c[i].name);
+		char hex[UID_HEX_LEN];
+		uid_to_hex(c[i].uid, hex);
+		snprintf(buf, sizeof buf, "%s{\"uid\":\"%s\",\"name\":\"%s\"}",
+			 i ? "," : "", hex, c[i].name);
 		httpd_resp_sendstr_chunk(req, buf);
 	}
 
@@ -141,7 +129,7 @@ static esp_err_t post_card(httpd_req_t *req)
 
 	if (read_body(req, body, sizeof body) != ESP_OK ||
 	    httpd_query_key_value(body, "uid", hex, sizeof hex) != ESP_OK ||
-	    !parse_uid(hex, uid))
+	    !uid_from_hex(hex, uid))
 		return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "UID must be 8 hex digits");
 
 	/* Name is optional; a too-long one is cut by cards_add() anyway. */
@@ -169,7 +157,7 @@ static esp_err_t delete_card(httpd_req_t *req)
 
 	if (httpd_req_get_url_query_str(req, query, sizeof query) != ESP_OK ||
 	    httpd_query_key_value(query, "uid", hex, sizeof hex) != ESP_OK ||
-	    !parse_uid(hex, uid))
+	    !uid_from_hex(hex, uid))
 		return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "UID must be 8 hex digits");
 
 	esp_err_t err = cards_remove(uid);
@@ -198,5 +186,7 @@ void web_start(void)
 	for (size_t i = 0; i < sizeof routes / sizeof routes[0]; i++)
 		ESP_ERROR_CHECK(httpd_register_uri_handler(srv, &routes[i]));
 
+	if (CONFIG_APP_ADMIN_PASSWORD[0] == '\0')
+		ESP_LOGW(TAG, "no admin password set (menuconfig), cards can't be changed from the web");
 	ESP_LOGI(TAG, "server started on port %d", cfg.server_port);
 }

@@ -8,7 +8,7 @@
  *   POST   /api/cards            add or rename a card (form: uid, name)
  *   DELETE /api/cards?uid=...    remove a card
  *   GET    /                     the page that uses all of the above
- * POST and DELETE need the admin password (admin_secrets.h) in an X-Password header.
+ * POST and DELETE need the admin password (menuconfig) in an X-Password header.
  * Call after wifi_init_sta(), accesslog_init() and cards_init().
  */
 void web_start(void);

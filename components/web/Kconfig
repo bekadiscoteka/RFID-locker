@@ -1,0 +1,11 @@
+menu "RFID web UI"
+
+    config APP_ADMIN_PASSWORD
+        string "Admin password"
+        default ""
+        help
+            Needed to add, rename or remove cards from the web page.
+            Leave empty to make the card list read-only on the web.
+            Stored in sdkconfig, which is not committed.
+
+endmenu

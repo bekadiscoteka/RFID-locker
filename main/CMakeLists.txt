@@ -1,5 +1,4 @@
-idf_component_register(SRCS "main.c" "access.c" "accesslog.c" "web.c" "cards.c"
+# Boot sequence and the RFID loop: the only place that knows about every component.
+idf_component_register(SRCS "main.c"
                        INCLUDE_DIRS "."
-                       EMBED_TXTFILES "index.html"
-                       REQUIRES rc522 wifi nvs_flash esp_driver_gpio esp_timer
-                                esp_netif esp_http_server)
+                       PRIV_REQUIRES rc522 wifi access web nvs_flash esp_netif esp_timer)

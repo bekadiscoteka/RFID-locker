@@ -1,0 +1,15 @@
+menu "WiFi station"
+
+    config APP_WIFI_SSID
+        string "Network name (SSID)"
+        default ""
+        help
+            2.4 GHz network to join. The ESP32 can't see 5 GHz networks.
+
+    config APP_WIFI_PASSWORD
+        string "Password"
+        default ""
+        help
+            WPA2 password. Stored in sdkconfig, which is not committed.
+
+endmenu

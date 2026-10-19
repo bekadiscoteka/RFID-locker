@@ -2,9 +2,9 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "sdkconfig.h"
 
 #include "wifi.h"
-#include "wifi_secrets.h"
 
 static const char *TAG = "wifi";
 
@@ -47,8 +47,15 @@ static void scan_print(void)
 
 void wifi_init_sta(void)
 {
+	/* The network stack is needed even without WiFi: SNTP and the HTTP server use it. */
 	ESP_ERROR_CHECK(esp_netif_init());
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+	if (CONFIG_APP_WIFI_SSID[0] == '\0') {
+		ESP_LOGE(TAG, "no network set: idf.py menuconfig -> WiFi station");
+		return;
+	}
+
 	esp_netif_create_default_wifi_sta();
 
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -60,8 +67,8 @@ void wifi_init_sta(void)
 
 	wifi_config_t wc = {
 		.sta = {
-			.ssid = WIFI_SSID,
-			.password = WIFI_PASS,
+			.ssid = CONFIG_APP_WIFI_SSID,
+			.password = CONFIG_APP_WIFI_PASSWORD,
 			.threshold.authmode = WIFI_AUTH_WPA2_PSK,
 		},
 	};
@@ -75,5 +82,5 @@ void wifi_init_sta(void)
 		esp_wifi_connect();
 	}
 
-	ESP_LOGI(TAG, "started, connecting to \"%s\"", WIFI_SSID);
+	ESP_LOGI(TAG, "started, connecting to \"%s\"", CONFIG_APP_WIFI_SSID);
 }

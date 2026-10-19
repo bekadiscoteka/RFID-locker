@@ -1,10 +1,19 @@
+# Build output and editor caches
 build/
-wirecolorconfig.txt
+.cache/
 *.swp
 *.vimrc
+
+# Local config: holds WiFi and admin passwords (template is sdkconfig.defaults)
+sdkconfig
+sdkconfig.old
+*.old
+
+# Old secret headers, replaced by menuconfig. Safe to delete.
+wifi_secrets.h
+admin_secrets.h
+
+# Personal notes
 LEARNING.md
 CLAUDE.md
-*.old
-wifi_secrets.h
-main/admin_secrets.h
-.cache/
+wirecolorconfig.txt

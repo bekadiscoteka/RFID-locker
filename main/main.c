@@ -22,37 +22,23 @@
 
 static const char *TAG = "app";
 
-void app_main(void)
+/* NVS holds the WiFi driver's data and our card list. Erase and retry if full or from an older IDF. */
+static void nvs_init(void)
 {
-	/* NVS: needed by the WiFi driver. Erase and retry if full or from an older IDF. */
 	esp_err_t ret = nvs_flash_init();
 	if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
 		ESP_ERROR_CHECK(nvs_flash_erase());
 		ret = nvs_flash_init();
 	}
 	ESP_ERROR_CHECK(ret);
+}
 
-	accesslog_init();
-	cards_init();
-	access_init(LED_PIN, OUT_PIN);
-
-	wifi_init_sta();
-
-	/* Sets the clock once WiFi is up; log times count from 1970 until then. */
-	esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-	ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
-
-	web_start();
-
-	rc522_init(&(rc522_pins_t){
-		.mosi = MOSI, .miso = MISO, .sclk = SCLK, .cs = SS, .rst = RST,
-	});
-
+/* Poll the reader forever: decide on each new card and hand the decision to access_event(). */
+static void rfid_loop(void)
+{
 	uint8_t uid[RC522_UID_LEN];
 	uint8_t last_uid[RC522_UID_LEN] = { 0 };
 	int64_t last_seen = 0;
-
-	ESP_LOGI(TAG, "ready, waiting for cards");
 
 	while (1) {
 		if (rc522_read_uid(uid) == RC_OK) {
@@ -69,4 +55,27 @@ void app_main(void)
 
 		vTaskDelay(pdMS_TO_TICKS(POLL_MS));
 	}
+}
+
+void app_main(void)
+{
+	/* 1. Storage and app state */
+	nvs_init();
+	accesslog_init();
+	cards_init();
+	access_init(LED_PIN, OUT_PIN);
+
+	/* 2. Network: WiFi, clock (log times count from 1970 until SNTP syncs), web UI */
+	wifi_init_sta();
+	esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+	ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp));
+	web_start();
+
+	/* 3. Reader */
+	rc522_init(&(rc522_pins_t){
+		.mosi = MOSI, .miso = MISO, .sclk = SCLK, .cs = SS, .rst = RST,
+	});
+
+	ESP_LOGI(TAG, "ready, waiting for cards");
+	rfid_loop();
 }

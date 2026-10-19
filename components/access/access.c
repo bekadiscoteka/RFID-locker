@@ -4,6 +4,7 @@
 
 #include "access.h"
 #include "accesslog.h"
+#include "uid.h"
 
 #define PULSE_US	(3000 * 1000)	/* output high time on grant */
 #define BLINK_US	(300 * 1000)	/* LED blink on deny */
@@ -48,9 +49,11 @@ void access_init(int led_pin, int out_pin)
 
 void access_event(const uint8_t uid[RC522_UID_LEN], bool granted)
 {
+	char hex[UID_HEX_LEN];
+	uid_to_hex(uid, hex);
+
 	accesslog_add(uid, granted);
-	ESP_LOGI(TAG, "%02X%02X%02X%02X %s", uid[0], uid[1], uid[2], uid[3],
-		 granted ? "GRANTED" : "denied");
+	ESP_LOGI(TAG, "%s %s", hex, granted ? "GRANTED" : "denied");
 
 	if (granted) {
 		pulsing = true;

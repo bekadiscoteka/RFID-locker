@@ -1,0 +1,4 @@
+# Project settings that differ from ESP-IDF defaults. Committed.
+# Your own sdkconfig (WiFi and admin passwords) is generated from this and is not committed:
+# set those with `idf.py menuconfig`.
+CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y

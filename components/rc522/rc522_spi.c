@@ -12,7 +12,7 @@ static spi_device_handle_t rc522_handle;
 
 
 /* Register access */
-uint8_t readreg(uint8_t addr)
+uint8_t rc522_spi_read(uint8_t addr)
 {
 	uint8_t formatted_addr = ((addr << 1) & ~1U) | 0x80;
 	spi_transaction_t transaction = {
@@ -25,7 +25,7 @@ uint8_t readreg(uint8_t addr)
 	return transaction.rx_data[1];
 }
 
-void writereg(uint8_t addr, uint8_t value)
+void rc522_spi_write(uint8_t addr, uint8_t value)
 {
 	uint8_t formatted_addr = (addr << 1) & ~0x80;
 	spi_transaction_t transaction = {
@@ -37,7 +37,7 @@ void writereg(uint8_t addr, uint8_t value)
 	ESP_ERROR_CHECK(spi_device_polling_transmit(rc522_handle, &transaction));
 }
 
-void initialize_spi(const rc522_pins_t *pins)
+void rc522_spi_init(const rc522_pins_t *pins)
 {
 	spi_bus_config_t bus_config = {
 		.mosi_io_num = pins->mosi,

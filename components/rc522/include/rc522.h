@@ -9,7 +9,6 @@ typedef enum {
 	RC_OK,		/* card answered, data received and checked */
 	RC_NORESP,	/* no card in the field */
 	RC_ERR,		/* bad data, unsupported card, or reader not responding */
-	RC_WARN,
 	RC_COLL,	/* more than one card answered */
 } rc_status_t;
 
