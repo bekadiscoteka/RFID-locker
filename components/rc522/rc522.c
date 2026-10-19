@@ -7,9 +7,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "rc522.h"
 #include "rc522_spi.h"
 
-#define waitsec(sec)	( vTaskDelay(pdMS_TO_TICKS( (sec) * 1000)) )
 #define NOW		( esp_timer_get_time() )
 
 #define MIN(a, b)	( a <= b ? a : b )
@@ -94,29 +94,28 @@ static void flush_fifo(void)
 }
 
 /* Device setup */
-#ifdef HARDRESET
-static void rc522_reset(void)
+static void hard_reset(int rst)
 {
-	gpio_set_level(RST, 0);
+	gpio_set_level(rst, 0);
 	vTaskDelay(pdMS_TO_TICKS(10));
-	gpio_set_level(RST, 1);
+	gpio_set_level(rst, 1);
 	vTaskDelay(pdMS_TO_TICKS(50));
 }
-#endif
 
-static void configure_reset_pin(void)
+static void configure_reset_pin(int rst)
 {
-#ifdef HARDRESET
+	if (rst < 0)
+		return;
+
 	gpio_config_t io_conf = {
-		.pin_bit_mask = (1ULL << RST),
+		.pin_bit_mask = (1ULL << rst),
 		.mode = GPIO_MODE_OUTPUT,
 		.pull_down_en = GPIO_PULLDOWN_DISABLE,
 		.pull_up_en = GPIO_PULLUP_DISABLE,
 		.intr_type = GPIO_INTR_DISABLE,
 	};
 	ESP_ERROR_CHECK(gpio_config(&io_conf));
-	rc522_reset();
-#endif
+	hard_reset(rst);
 }
 
 
@@ -144,8 +143,6 @@ static void initialize_rc522(void)
 /*
  * Extract full content of FIFO buffer
 */
-
-typedef enum {RC_OK, RC_NORESP, RC_ERR, RC_WARN, RC_COLL} rc_status_t;
 
 static size_t readfifo(uint8_t rx[], size_t rxlen) {
 
@@ -303,28 +300,24 @@ static rc_status_t read_uid4(uint8_t uid[4])
         return status;
 }
 
-void app_main(void)
+/*
+ * Public API (see include/rc522.h)
+ */
+
+void rc522_init(const rc522_pins_t *pins)
 {
-	configure_reset_pin();
-	initialize_spi();
+	configure_reset_pin(pins->rst);
+	initialize_spi(pins);
 	initialize_rc522();
+}
 
-	int uidlen;
-	uint8_t uid[5];
-	rc_status_t status;
+rc_status_t rc522_read_uid(uint8_t uid[RC522_UID_LEN])
+{
+	int uidlen = 0;
 
-	while (1) {
-		status = request_card(&uidlen);
-		if (status == RC_OK) {
-			ESP_LOGI("ATQA response", "UID size: %d bytes", uidlen);
+	rc_status_t status = request_card(&uidlen);
+	if (status != RC_OK)
+		return status;
 
-			status = read_uid4(uid);
-			if (status == RC_OK) 
-				ESP_LOGI("UID", "detected UID: %02X %02X %02X %02X", uid[0], uid[1], uid[2], uid[3]);
-		}
-		
-
-		waitsec(1);
-	}
-
+	return read_uid4(uid);
 }

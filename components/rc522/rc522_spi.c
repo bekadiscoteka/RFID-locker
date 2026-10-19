@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include "pincfg.h"
 #include "driver/spi_common.h"
 #include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
@@ -38,12 +37,12 @@ void writereg(uint8_t addr, uint8_t value)
 	ESP_ERROR_CHECK(spi_device_polling_transmit(rc522_handle, &transaction));
 }
 
-void initialize_spi(void)
+void initialize_spi(const rc522_pins_t *pins)
 {
 	spi_bus_config_t bus_config = {
-		.mosi_io_num = MOSI,
-		.miso_io_num = MISO,
-		.sclk_io_num = SCLK,
+		.mosi_io_num = pins->mosi,
+		.miso_io_num = pins->miso,
+		.sclk_io_num = pins->sclk,
 		.quadhd_io_num = -1,
 		.quadwp_io_num = -1,
 		.max_transfer_sz = 64,
@@ -51,7 +50,7 @@ void initialize_spi(void)
 	spi_device_interface_config_t device_config = {
 		.mode = 0,
 		.clock_speed_hz = 5 * 1000 * 1000,
-		.spics_io_num = SS,
+		.spics_io_num = pins->cs,
 		.queue_size = 5,
 	};
 
