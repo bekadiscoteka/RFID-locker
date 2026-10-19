@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFID Access</title>
+<style>
+	:root {
+		--bg: #f6f7f9; --card: #fff; --fg: #1d2330; --muted: #6b7280;
+		--line: #e5e7eb; --ok: #15803d; --ok-bg: #dcfce7; --no: #b91c1c; --no-bg: #fee2e2;
+		--accent: #2563eb; --accent-fg: #fff; --input: #fff; --hl: #fef9c3;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg: #111418; --card: #1a1f26; --fg: #e5e7eb; --muted: #9ca3af;
+			--line: #2a313b; --ok: #4ade80; --ok-bg: #14301f; --no: #f87171; --no-bg: #3a1717;
+			--accent: #3b82f6; --accent-fg: #fff; --input: #111418; --hl: #3a3416;
+		}
+	}
+	* { box-sizing: border-box; }
+	body { margin: 0; background: var(--bg); color: var(--fg);
+		font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+	main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+	h1 { font-size: 22px; margin: 0 0 4px; }
+	h2 { font-size: 17px; margin: 28px 0 10px; display: flex; align-items: baseline; gap: 8px; }
+	h2 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+	#status { color: var(--muted); font-size: 13px; }
+	.err { color: var(--no) !important; }
+	.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+	table { width: 100%; border-collapse: collapse; }
+	th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+	th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+	tr:last-child td { border-bottom: 0; }
+	td.act { text-align: right; width: 1%; white-space: nowrap; }
+	.uid { font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .05em; }
+	.sub { display: block; color: var(--muted); font-size: 12px; }
+	.badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+	.ok { color: var(--ok); background: var(--ok-bg); }
+	.no { color: var(--no); background: var(--no-bg); }
+	.empty { padding: 24px; text-align: center; color: var(--muted); }
+	form { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px; border-top: 1px solid var(--line); }
+	input { font: inherit; color: var(--fg); background: var(--input); border: 1px solid var(--line);
+		border-radius: 8px; padding: 7px 10px; min-width: 0; }
+	input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+	#uid { flex: 0 1 130px; } #name { flex: 1 1 160px; }
+	button { font: inherit; font-weight: 600; border-radius: 8px; padding: 7px 14px; cursor: pointer;
+		border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg); }
+	button.ghost { background: transparent; color: var(--accent); padding: 3px 12px; font-size: 13px; }
+	button.danger { border-color: var(--no); color: var(--no); }
+	button:disabled { opacity: .5; cursor: default; }
+	.admin { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+	.admin input { width: 180px; }
+	#msg { min-height: 20px; margin: 8px 2px 0; font-size: 13px; color: var(--ok); }
+	tr.hl td { background: var(--hl); transition: background 1.5s; }
+</style>
+</head>
+<body>
+<main>
+	<h1>RFID access</h1>
+	<div id="status">Loading…</div>
+	<label class="admin">Admin password
+		<input id="pass" type="password" autocomplete="current-password" placeholder="needed to change cards">
+	</label>
+
+	<h2>Allowed cards <small id="cardcount"></small></h2>
+	<div class="card">
+		<table>
+			<thead><tr><th>Name</th><th>Card UID</th><th></th></tr></thead>
+			<tbody id="cards"></tbody>
+		</table>
+		<div id="nocards" class="empty" hidden>No cards allowed yet. Tap a card on the reader, then press <b>Allow</b> in the log below.</div>
+		<form id="add">
+			<input id="uid" class="uid" placeholder="UID, e.g. DEADBEEF" maxlength="16" autocomplete="off" required>
+			<input id="name" placeholder="Name (optional)" maxlength="23" autocomplete="off">
+			<button>Add card</button>
+		</form>
+	</div>
+	<div id="msg"></div>
+
+	<h2>Access log <small>newest first</small></h2>
+	<div class="card">
+		<table>
+			<thead><tr><th>Time</th><th>Card</th><th>Result</th><th></th></tr></thead>
+			<tbody id="rows"></tbody>
+		</table>
+		<div id="empty" class="empty" hidden>No cards scanned yet. Tap a card on the reader.</div>
+	</div>
+</main>
+<script>
+/* Before SNTP sync the device clock counts from 1970. */
+const SYNCED = 1600000000;
+const $ = id => document.getElementById(id);
+let cards = new Map();	/* uid -> name */
+
+const pass = $('pass');
+try { pass.value = sessionStorage.getItem('pass') || ''; } catch (e) {}
+pass.addEventListener('input', () => {
+	try { sessionStorage.setItem('pass', pass.value); } catch (e) {}
+});
+
+function fmt(t) {
+	return t < SYNCED ? 'clock not set' : new Date(t * 1000).toLocaleString();
+}
+
+function el(tag, text, cls) {
+	const e = document.createElement(tag);
+	if (text != null) e.textContent = text;
+	if (cls) e.className = cls;
+	return e;
+}
+
+function td(...children) {
+	const c = el('td');
+	c.append(...children);
+	return c;
+}
+
+function button(text, cls, onclick) {
+	const b = el('button', text, cls);
+	b.type = 'button';
+	b.onclick = onclick;
+	return b;
+}
+
+function say(text, isErr) {
+	$('msg').textContent = text;
+	$('msg').className = isErr ? 'err' : '';
+}
+
+async function api(method, url, body) {
+	const r = await fetch(url, {
+		method,
+		headers: { 'X-Password': pass.value },
+		body: body ? new URLSearchParams(body) : undefined,
+	});
+	if (!r.ok) {
+		if (r.status === 401) { pass.focus(); throw new Error('Wrong admin password'); }
+		throw new Error((await r.text()) || 'Error ' + r.status);
+	}
+}
+
+function renderCards(list) {
+	cards = new Map(list.map(c => [c.uid, c.name]));
+	$('cards').replaceChildren(...list.map(c => {
+		const tr = el('tr');
+		tr.append(
+			td(el('span', c.name || 'Unnamed', c.name ? '' : 'sub')),
+			td(el('span', c.uid, 'uid')),
+			td(button('Remove', 'ghost danger', () => removeCard(c))));
+		tr.lastChild.className = 'act';
+		return tr;
+	}));
+	$('nocards').hidden = list.length > 0;
+	$('cardcount').textContent = list.length ? list.length + ' of 32' : '';
+}
+
+function renderLog(entries) {
+	$('rows').replaceChildren(...entries.map(e => {
+		const name = cards.get(e.uid);
+		const who = td();
+		if (name) {
+			who.append(el('span', name), el('span', e.uid, 'sub uid'));
+		} else {
+			who.append(el('span', e.uid, 'uid'));
+		}
+		const act = td();
+		act.className = 'act';
+		if (!e.ok && !cards.has(e.uid))
+			act.append(button('Allow', 'ghost', () => prefill(e.uid)));
+		const tr = el('tr');
+		tr.append(td(el('span', fmt(e.t))), who,
+			td(el('span', e.ok ? 'Granted' : 'Denied', 'badge ' + (e.ok ? 'ok' : 'no'))), act);
+		return tr;
+	}));
+	$('empty').hidden = entries.length > 0;
+}
+
+function prefill(uid) {
+	$('uid').value = uid;
+	$('name').focus();
+	$('add').scrollIntoView({ behavior: 'smooth', block: 'center' });
+	say('Give the card a name and press Add card.');
+}
+
+async function removeCard(c) {
+	if (!confirm('Remove ' + (c.name || c.uid) + '? This card will be denied from now on.')) return;
+	try {
+		await api('DELETE', '/api/cards?uid=' + c.uid);
+		say('Removed ' + (c.name || c.uid) + '.');
+		refresh();
+	} catch (err) { say(err.message, true); }
+}
+
+$('add').addEventListener('submit', async ev => {
+	ev.preventDefault();
+	const uid = $('uid').value.replace(/[\s:-]/g, '').toUpperCase();
+	if (!/^[0-9A-F]{8}$/.test(uid)) { say('UID must be 8 hex digits, like DEADBEEF.', true); return; }
+	const btn = ev.submitter;
+	if (btn) btn.disabled = true;
+	try {
+		await api('POST', '/api/cards', { uid, name: $('name').value.trim() });
+		const label = $('name').value.trim() || uid;
+		$('uid').value = $('name').value = '';
+		say((cards.has(uid) ? 'Renamed ' : 'Allowed ') + label + '.');
+		refresh();
+	} catch (err) { say(err.message, true); }
+	if (btn) btn.disabled = false;
+});
+
+async function refresh() {
+	const status = $('status');
+	try {
+		const [c, l] = await Promise.all([
+			fetch('/api/cards').then(r => r.json()),
+			fetch('/api/log').then(r => r.json()),
+		]);
+		renderCards(c.cards);
+		renderLog(l.entries);
+		status.className = '';
+		status.textContent = 'Device clock ' + (l.now < SYNCED ? 'not synced yet' : 'synced') +
+			' · updated ' + new Date().toLocaleTimeString();
+	} catch (err) {
+		status.className = 'err';
+		status.textContent = 'Device not reachable, retrying…';
+	}
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

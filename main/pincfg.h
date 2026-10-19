@@ -7,4 +7,7 @@
 #define SS   27
 #define RST  14
 
+#define LED_PIN 2	/* on-board LED on most ESP32 dev boards */
+#define OUT_PIN 4	/* access output: high for ~3 s on grant */
+
 #endif

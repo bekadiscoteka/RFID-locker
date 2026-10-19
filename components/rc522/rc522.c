@@ -207,7 +207,7 @@ static rc_status_t transceive(const uint8_t *tx, size_t tx_len, uint8_t tx_last_
 
 		if (irq & RxIRq_MASK) {
 
-			status = readfifo(rx, rx_len) > 0 ? RC_OK : RC_ERR;
+			status = readfifo(rx, rx_len) == rx_len ? RC_OK : RC_ERR;
 
 			break;
 		}
@@ -250,16 +250,17 @@ static int request_card(int *uidlen)
 
 	switch (status) {
 		case RC_WARN:	ESP_LOGW("request_card", "pay attention to last warnings from transceive!"); break;
-		case RC_OK:	*uidlen = atqa_uid_decode(atqa[0]); break;
+		case RC_OK:
+			*uidlen = atqa_uid_decode(atqa[0]);
+			if (*uidlen == 0)
+				status = RC_ERR;
+			break;
 		case RC_NORESP: break;
 		case RC_ERR: 	break;	
 		default:	ESP_LOGE("request_card", "Unsupported status: %d", status); break;
 	}
 
-	if (*uidlen == 0)
-		return RC_ERR;
-
-	return status; 
+	return status;
 }
 
 /*

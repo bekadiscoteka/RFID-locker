@@ -9,7 +9,7 @@
 static const char *TAG = "wifi";
 
 /* Debug: list visible networks once on boot. Set to 0 when WiFi works. */
-#define WIFI_SCAN_ON_BOOT 1
+#define WIFI_SCAN_ON_BOOT 0
 
 /* True while the boot scan runs; connecting at the same time would fail the scan. */
 static volatile bool scanning;

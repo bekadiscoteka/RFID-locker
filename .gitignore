@@ -6,3 +6,5 @@ LEARNING.md
 CLAUDE.md
 *.old
 wifi_secrets.h
+main/admin_secrets.h
+.cache/
